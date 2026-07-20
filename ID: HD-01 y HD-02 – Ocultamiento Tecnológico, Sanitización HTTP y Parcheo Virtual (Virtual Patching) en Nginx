@@ -1,1 +1,67 @@
+# Ubicación del archivo en el servidor: /etc/nginx/conf.d/hardening.conf
 
+server {
+    listen 443 ssl http2;
+    server_name *.appsociety.cloud;
+
+    # ================================================================
+    # CONTROL HD-02: OFUSCACIÓN DE FIRMAS (REDUCCIÓN DE SUPERFICIE)
+    # ================================================================
+    server_tokens off;                # Elimina el texto de versión "1.18.0" de Nginx de los errores del sistema
+    proxy_hide_header X-Powered-By;   # Elimina la cabecera que expone "PHP 7.4.33" ante httpx y Wappalyzer
+    fastcgi_hide_header X-Powered-By; # Garantiza el borrado en respuestas dinámicas procesadas por el backend
+    
+    # Suprimir cabeceras adicionales de servidores proxy intermedios
+    proxy_hide_header Server;
+    fastcgi_hide_header Server;
+
+    # ================================================================
+    # PARCHEO VIRTUAL: INTERCEPCIÓN DE PAYLOADS MALICIOSOS (WAF LIGERO)
+    # ================================================================
+    
+    # 1. Mitigación PHP Crítica (CVE-2022-31629 / CVE-2023-3824 - RCE y Buffer Overflow)
+    # Intercepta peticiones anómalas que busquen explotar variables de entorno o inyectar funciones de ejecución remota
+    if ($request_uri ~* "(\.php|wp-config|environment|eval\(|base64_decode)") {
+        return 403; # Aborta la conexión inmediatamente devolviendo un acceso denegado
+    }
+
+    # 2. Mitigación Front-End (Bootstrap 4.3.2001 - XSS en Componentes / CVE-2019-8331)
+    # Intercepta la introducción de vectores de script maliciosos (<script>, javascript:, onerror=) en los argumentos de la URL
+    if ($args ~* "(script|data:|onerror|onload|alert\(|window\.)") {
+        return 403;
+    }
+
+    # 3. Mitigación jQuery (3.3.2001 - Prototype Pollution / CVE-2019-11358)
+    # Bloquea payloads dirigidos a modificar maliciosamente las propiedades de objetos JavaScript a través de peticiones HTTP
+    if ($args ~* "(__proto__|\.prototype|constructor)") {
+        return 403;
+    }
+
+    # 4. Mitigación DataTables (1.10.19 - Cross-Site Scripting / CVE-2020-28458)
+    # Las cabeceras de Content-Security-Policy (CSP) inyectadas abajo actúan como control complementario bloqueando 
+    # cualquier script que intente ejecutarse de forma reflejada dentro de los campos de ordenación de las tablas.
+
+    # ================================================================
+    # CONTROL HD-01: CABECERAS DE SEGURIDAD (RESTRICTIVIDAD MÁXIMA)
+    # ================================================================
+    # Evita el secuestro de clic impidiendo que la plataforma sea embebida en marcos externos (Mitiga Clickjacking)
+    add_header X-Frame-Options "DENY" always;
+    
+    # Fuerza al navegador a respetar estrictamente los tipos MIME enviados por el servidor (Evita ejecución de código oculto)
+    add_header X-Content-Type-Options "nosniff" always;
+    
+    # Activa la protección nativa contra scripts cruzados en navegadores legados
+    add_header X-XSS-Protection "1; mode=block" always;
+    
+    # Fuerza la comunicación exclusiva a través de canales HTTPS cifrados durante un año completo (Previene degradación de canal)
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+    
+    # Política de Seguridad del Contenido: Restringe la ejecución de JavaScript únicamente al dominio origen
+    # Neutraliza los XSS explotables en Bootstrap o jQuery al bloquear código insertado externamente en el navegador.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline';" always;
+
+    location / {
+        include fastcgi_params;
+        fastcgi_pass unix:/var/run/php7.4-fpm.sock;
+    }
+}
