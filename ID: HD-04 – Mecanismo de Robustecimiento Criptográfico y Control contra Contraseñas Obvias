@@ -1,0 +1,37 @@
+<?php
+// Ubicación del componente de validación: /var/www/html/helpers/password_policy.php
+
+function validarYRegistrarClaveSecure($password, $username, $pdo, $userId) {
+    // 1. EVALUACIÓN DE COMPLEJIDAD Y FORTALEZA DE CONTRASEÑAS
+    $longitudValida = strlen($password) >= 12; // Se fuerza una longitud mínima de 12 caracteres
+    $tieneMayuscula  = preg_match('/[A-Z]/', $password);
+    $tieneMinuscula  = preg_match('/[a-z]/', $password);
+    $tieneNumero     = preg_match('/[0-9]/', $password);
+    $tieneEspecial   = preg_match('/[^a-zA-Z0-9]/', $password);
+
+    // CONTROL TÉCNICO: Denegar de forma estricta contraseñas idénticas al usuario o términos predecibles del entorno
+    if (strtolower($password) === strtolower($username) || $password === "admin123" || $password === "Intelligent2026") {
+        return ["success" => false, "message" => "Política de seguridad infringida: La contraseña provista es muy obvia o insegura."];
+    }
+
+    if (!$longitudValida || !$tieneMayuscula || !$tieneMinuscula || !$tieneNumero || !$tieneEspecial) {
+        return ["success" => false, "message" => "La contraseña debe contener al menos 12 caracteres, incluyendo letras mayúsculas, minúsculas, números y caracteres especiales."];
+    }
+
+    // 2. APLICACIÓN DE ROBUSTECIMIENTO CRIPTOGRÁFICO MEDIANTE ARGON2ID
+    // Este algoritmo introduce resistencia computacional en memoria contra ataques masivos de descifrado por hardware (GPUs).
+    $options = [
+        'memory_cost' => 65536, // Asigna 64 Megabytes de memoria RAM dedicados al procesamiento del hash
+        'time_cost'   => 4,     // Fuerza 4 pasadas de computación secuencial para retardar ataques de fuerza bruta
+        'threads'     => 2      // Distribuye la tarea en 2 hilos de procesamiento en paralelo
+    ];
+    
+    // Generación del Hash criptográfico seguro
+    $hashSeguro = password_hash($password, PASSWORD_ARGON2ID, $options);
+
+    // Almacenamiento seguro del registro dentro del repositorio de datos del inquilino correspondiente
+    $stmt = $pdo->prepare("UPDATE users SET password_hash = :hash WHERE id = :id");
+    $stmt->execute(['hash' => $hashSeguro, 'id' => $userId]);
+
+    return ["success" => true, "message" => "Contraseña robustecida y registrada correctamente en la base de datos."];
+}
