@@ -1,0 +1,36 @@
+#!/bin/bash
+# Ubicación del archivo de despliegue: /usr/local/bin/firewall_hardening.sh
+# Instrucción operativa: Debe ser ejecutado con privilegios administrativos mediante 'sudo bash firewall_hardening.sh'
+
+echo "[+] Iniciando el Plan de Endurecimiento de Capa de Red (Control HD-05)..."
+
+# Paso 1: Restablecer y purgar todas las políticas previas del firewall para evitar reglas huerfanas
+ufw --force reset
+
+# Paso 2: Implementar la postura fundamental de ciberseguridad: "Denegación por Defecto"
+# Cualquier puerto o paquete entrante que no se autorice explícitamente abajo, será descartado (DROP).
+ufw default deny incoming
+ufw default allow outgoing
+
+# Paso 3: Autorizar de forma exclusiva el tráfico web legítimo y cifrado de la organización
+# Habilita el acceso de los clientes de Bolivia hacia la plataforma SaaS multi-inquilino
+ufw allow 80/tcp  comment 'Permitir solicitudes HTTP estandar para redireccionamiento'
+ufw allow 443/tcp comment 'Permitir trafico HTTPS perimetral seguro'
+
+# Paso 4: REMEDIACIÓN DEL PUERTO EXPUESTO 3306 (MySQL Database)
+# Se bloquea de forma absoluta el acceso desde el internet global. El servicio MySQL continuará escuchando 
+# solicitudes internas locales (127.0.0.1) para la aplicación PHP, pero será invisible e inaccesible desde el exterior.
+ufw deny 3306/tcp comment 'Aislamiento perimetral de la Base de Datos MySQL'
+
+# Paso 5: HARDENING Y MITIGACIÓN DE VULNERABILIDADES EN EL PUERTO 22 (OpenSSH)
+# Para neutralizar los exploits de Ejecución Remota de Código (RCE) en SSH recopilados en el diagnóstico, 
+# se restringe el acceso al puerto 22. Solo se permite la conexión si proviene del direccionamiento IP estático
+# de la red de administración centralizada de la empresa.
+IP_ADMINISTRACION_CONFIRMADA="200.119.50.45" # Reemplazar con la dirección IP pública fija de la oficina central
+ufw allow from $IP_ADMINISTRACION_CONFIRMADA to any port 22 proto tcp comment 'Acceso SSH restringido a IP de confianza'
+
+# Paso 6: Activar los controles en caliente e inyectar las directivas en la configuración del sistema
+ufw --force enable
+systemctl restart ufw
+
+echo "[+] Endurecimiento de Capa de Red completado de forma exitosa. Superficie de ataque externa contraída."
