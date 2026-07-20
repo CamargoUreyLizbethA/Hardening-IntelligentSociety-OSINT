@@ -1,0 +1,58 @@
+<?php
+// Ubicación del archivo remediado de la API: /var/www/html/api/auth_verify.php
+header('Content-Type: application/json');
+header('X-Content-Type-Options: nosniff');
+
+// Captura segura de los parámetros de autenticación transmitidos en formato JSON
+$input = json_decode(file_get_contents('php://input'), true);
+$userId = $input['user_id'] ?? null;
+$userCodeInput = $input['login_code'] ?? null; // Código proveído por el usuario final
+
+if (!$userId || !$userCodeInput) {
+    http_response_code(400);
+    echo json_encode(["success" => false, "message" => "Parámetros de solicitud de acceso incompletos."]);
+    exit;
+}
+
+try {
+    // SUB-PROCESO 1: Consulta preparada con tipado estricto para mitigar vectores de inyección SQL (SQLi)
+    $stmt = $pdo->prepare("SELECT secret_code_hash, tenant_id FROM tenant_auth WHERE user_id = :user_id AND expires_at > NOW() AND status = 'PENDING'");
+    $stmt->execute(['user_id' => $userId]);
+    $authData = $stmt->fetch();
+
+    if ($authData) {
+        // Derivación criptográfica local del código ingresado por el usuario para su comparación uniforme
+        $userHashInput = hash('sha256', $userCodeInput);
+        
+        // SUB-PROCESO 2: INTERCEPCIÓN Y VALIDACIÓN EXCLUSIVA DEL LADO DEL SERVIDOR
+        // Se ejecuta una comparación en tiempo constante (hash_equals) en la memoria RAM del backend para prevenir ataques de temporización.
+        if (hash_equals($authData['secret_code_hash'], $userHashInput)) {
+            
+            // Mitigación contra Ataques de Reutilización (Replay Attacks): Se invalida el token de forma instantánea cambiando su estado
+            $updateStmt = $pdo->prepare("UPDATE tenant_auth SET status = 'USED' WHERE user_id = :user_id");
+            $updateStmt->execute(['user_id' => $userId]);
+
+            // Generación interna de una sesión web segura mediante un token JWT cifrado
+            $sessionToken = generateSecureJWT($userId, $authData['tenant_id']);
+            
+            // EXPLICACIÓN DE SANITIZACIÓN RADICAL DE LA RESPUESTA:
+            // Se purga en su totalidad el Response Body. El token de acceso jamás viaja hacia el navegador del cliente.
+            // El canal externo solo recibe una confirmación genérica de redirección autorizada.
+            echo json_encode([
+                "success" => true, 
+                "status" => "TRANSACTION_AUTHORIZED",
+                "action" => "INITIATE_SECURE_REDIRECT"
+            ]);
+            exit;
+        }
+    }
+    
+    // Mitigación de Enumeración de Cuentas: Se utiliza una respuesta genérica tanto si falla el ID como el código de verificación
+    http_response_code(401);
+    echo json_encode(["success" => false, "message" => "Proceso de verificación fallido. Verifique las credenciales provistas."]);
+
+} catch (PDOException $e) {
+    // Parche Virtual de Errores: Se captura la excepción interna para evitar la fuga de nombres de tablas o estructuras de bases de datos
+    http_response_code(500);
+    echo json_encode(["success" => false, "message" => "Error interno de procesamiento perimetral."]);
+}
